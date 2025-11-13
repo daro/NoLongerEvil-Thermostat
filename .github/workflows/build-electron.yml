@@ -37,13 +37,13 @@ jobs:
         # Import Apple API key for app notarization on macOS
         run: |
           mkdir -p ~/private_keys/
-          echo '${{ secrets.api_key }}' > ~/private_keys/AuthKey_${{ secrets.api_key_id }}.p8
+          echo '${{ secrets.API_KEY }}' > ~/private_keys/AuthKey_${{ secrets.API_KEY_ID }}.p8
 
       - name: Build Electron app
         uses: samuelmeuli/action-electron-builder@v1
         env:
-          API_KEY_ID: ${{ secrets.APPLE_ID }}
-          API_KEY_ISSUER_ID: ${{ secrets.APPLE_ID_PASSWORD }}
+          API_KEY_ID: ${{ secrets.API_KEY_ID }}
+          API_KEY_ISSUER_ID: ${{ secrets.API_KEY_ISSUER_ID }}
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
