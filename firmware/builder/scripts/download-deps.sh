@@ -77,21 +77,6 @@ download_uboot() {
 download_linux() {
   if [ -d "deps/linux" ] && [ -f "deps/linux/linux/Makefile" ]; then
     echo "[✓] Linux kernel already downloaded"
-
-    if [ ! -f "deps/initramfs_data.cpio" ]; then
-      echo "[→] initramfs_data.cpio missing, downloading from NestDFUAttack..."
-      if [ ! -d "deps/nestdfu-tmp" ]; then
-        git clone --depth=1 https://github.com/exploiteers/NestDFUAttack.git deps/nestdfu-tmp
-      fi
-
-      if [ -f "deps/nestdfu-tmp/Dev/initramfs_data.cpio" ]; then
-        cp deps/nestdfu-tmp/Dev/initramfs_data.cpio deps/initramfs_data.cpio
-        echo "[✓] Base initramfs copied from NestDFUAttack"
-      fi
-
-      rm -rf deps/nestdfu-tmp
-    fi
-
     return 0
   fi
 
@@ -165,66 +150,18 @@ setup_toolchain_path() {
   fi
 }
 
-DOWNLOAD_XLOADER=false
-DOWNLOAD_UBOOT=false
-DOWNLOAD_LINUX=false
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --xloader)
-      DOWNLOAD_XLOADER=true
-      shift
-      ;;
-    --uboot)
-      DOWNLOAD_UBOOT=true
-      shift
-      ;;
-    --linux)
-      DOWNLOAD_LINUX=true
-      shift
-      ;;
-    *)
-      shift
-      ;;
-  esac
-done
-
-if [ "$DOWNLOAD_XLOADER" = false ] && [ "$DOWNLOAD_UBOOT" = false ] && [ "$DOWNLOAD_LINUX" = false ]; then
-  DOWNLOAD_XLOADER=true
-  DOWNLOAD_UBOOT=true
-  DOWNLOAD_LINUX=true
-fi
-
 echo "═══════════════════════════════════════════════════════"
 echo " Downloading Build Dependencies"
 echo "═══════════════════════════════════════════════════════"
 echo
 
 download_toolchain
-
-if [ "$DOWNLOAD_XLOADER" = true ]; then
-  download_xloader
-else
-  echo "[→] Skipping x-loader download (not needed)"
-fi
-
-if [ "$DOWNLOAD_UBOOT" = true ]; then
-  download_uboot
-else
-  echo "[→] Skipping u-boot download (not needed)"
-fi
-
-if [ "$DOWNLOAD_LINUX" = true ]; then
-  download_linux
-else
-  echo "[→] Skipping Linux kernel download (not needed)"
-fi
-
+download_xloader
+download_uboot
+download_linux
 setup_toolchain_path
 
 echo
-echo "[✓] All required dependencies ready!"
+echo "[✓] All dependencies ready!"
 echo
-if [ "$DOWNLOAD_LINUX" = true ]; then
-  echo "Note: Base initramfs (initramfs_data.cpio) should already be present in source/"
-fi
+echo "Note: Base initramfs (initramfs_data.cpio) should already be present in source/"

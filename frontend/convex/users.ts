@@ -1,4 +1,4 @@
-import { mutation, query, internalMutation } from "./_generated/server";
+import { mutation, query, internalMutation, action } from "./_generated/server";
 import { v } from "convex/values";
 
 function randomEntryKey(): string {
@@ -47,8 +47,7 @@ export const generateEntryKey = mutation({
   handler: async (ctx, args) => {
     const ttl = args.ttlSeconds ?? 3600;
     const nowMs = Date.now();
-    const nowSeconds = Math.floor(nowMs / 1000);
-    const expiresAt = nowSeconds + ttl;
+    const expiresAt = nowMs + (ttl * 1000); // Convert TTL seconds to milliseconds
 
     // Delete all existing entry keys for this serial (both expired and active)
     const existingKeys = await ctx.db
@@ -74,7 +73,7 @@ export const generateEntryKey = mutation({
 
       if (!codeDoc) break;
 
-      const expired = codeDoc.expiresAt < nowSeconds;
+      const expired = codeDoc.expiresAt < nowMs;
       if (expired && !codeDoc.claimedBy) {
         break;
       }
@@ -115,7 +114,6 @@ export const claimEntryKey = mutation({
   handler: async (ctx, args) => {
     const code = args.code.toUpperCase();
     const nowMs = Date.now();
-    const nowSeconds = Math.floor(nowMs / 1000);
 
     const entry = await ctx.db
       .query("entryKeys")
@@ -130,7 +128,7 @@ export const claimEntryKey = mutation({
       throw new Error("Entry key already claimed");
     }
 
-    if (entry.expiresAt < nowSeconds) {
+    if (entry.expiresAt < nowMs) {
       throw new Error("Entry key expired");
     }
 
@@ -195,6 +193,129 @@ export const claimEntryKey = mutation({
       });
     }
 
+    // Initialize or update device object with structure_id
+    const deviceKey = `device.${entry.serial}`;
+    const structureId = `structure.${userId}`;
+    const structureKey = structureId; // The object_key for the structure state
+    const existingDevice = await ctx.db
+      .query("states")
+      .withIndex("by_key", (q) =>
+        q.eq("serial", entry.serial).eq("object_key", deviceKey)
+      )
+      .first();
+
+    if (!existingDevice) {
+      // Create new device object with structure_id (just the userId, not "structure.userId")
+      await ctx.db.insert("states", {
+        serial: entry.serial,
+        object_key: deviceKey,
+        object_revision: 1,
+        object_timestamp: nowMs,
+        value: {
+          structure_id: userId,
+        },
+        updatedAt: nowMs,
+      });
+    } else {
+      // Update existing device object with structure_id if not present
+      const currentValue = existingDevice.value || {};
+      if (!currentValue.structure_id) {
+        await ctx.db.patch(existingDevice._id, {
+          value: {
+            ...currentValue,
+            structure_id: userId,
+          },
+          updatedAt: nowMs,
+          object_revision: (existingDevice.object_revision || 0) + 1,
+          object_timestamp: nowMs,
+        });
+      }
+    }
+
+    // Initialize or update structure state object
+    const existingStructure = await ctx.db
+      .query("states")
+      .withIndex("by_key", (q) =>
+        q.eq("serial", entry.serial).eq("object_key", structureKey)
+      )
+      .first();
+
+    if (!existingStructure) {
+      // Create new structure object
+      await ctx.db.insert("states", {
+        serial: entry.serial,
+        object_key: structureKey,
+        object_revision: 1,
+        object_timestamp: nowMs,
+        value: {
+          time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          postal_code: "",
+          country_code: "US",
+          address_lines: [],
+          city: "",
+          state: "",
+          user: `user.${userId}`,
+          devices: [deviceKey],
+          away: false,
+          vacation_mode: false,
+          manual_away_timestamp: 0,
+          away_timestamp: nowMs,
+        },
+        updatedAt: nowMs,
+      });
+    } else {
+      // Update existing structure object to include this device if not already present
+      const currentValue = existingStructure.value || {};
+      const devices = currentValue.devices || [];
+
+      if (!devices.includes(deviceKey)) {
+        await ctx.db.patch(existingStructure._id, {
+          value: {
+            ...currentValue,
+            devices: [...devices, deviceKey],
+          },
+          updatedAt: nowMs,
+          object_revision: (existingStructure.object_revision || 0) + 1,
+          object_timestamp: nowMs,
+        });
+      }
+    }
+
+    // Initialize link object that connects device to structure
+    const linkKey = `link.${entry.serial}`;
+    const existingLink = await ctx.db
+      .query("states")
+      .withIndex("by_key", (q) =>
+        q.eq("serial", entry.serial).eq("object_key", linkKey)
+      )
+      .first();
+
+    if (!existingLink) {
+      await ctx.db.insert("states", {
+        serial: entry.serial,
+        object_key: linkKey,
+        object_revision: 1,
+        object_timestamp: nowMs,
+        value: {
+          structure: structureId,
+        },
+        updatedAt: nowMs,
+      });
+    } else {
+      // Update existing link if structure has changed
+      const currentValue = existingLink.value || {};
+      if (currentValue.structure !== structureId) {
+        await ctx.db.patch(existingLink._id, {
+          value: {
+            structure: structureId,
+          },
+          updatedAt: nowMs,
+          object_revision: (existingLink.object_revision || 0) + 1,
+          object_timestamp: nowMs,
+        });
+      }
+    }
+
     // Initialize user state object if it doesn't exist
     const userStateKey = `user.${userId}`;
     const existingUserState = await ctx.db
@@ -217,17 +338,532 @@ export const claimEntryKey = mutation({
           obsidian_version: "5.58rc3",
           profile_image_url: "",
           short_name: "",
+          structures: [structureId],
           structure_memberships: [
             {
+              structure: structureId,
               roles: ["owner"],
             },
           ],
+          away: false, // Initialize as home
+          away_timestamp: nowMs,
+          away_setter: 1, // Device sets initial status
+          vacation_mode: false,
+          manual_away_timestamp: 0,
         },
         updatedAt: nowMs,
       });
+    } else {
+      // If user state exists, ensure it has the structure reference and away fields
+      const currentValue = existingUserState.value || {};
+      const structures = currentValue.structures || [];
+      const structureMemberships = currentValue.structure_memberships || [];
+
+      // Check if this structure is already in the user's structures
+      const hasStructure = structures.includes(structureId);
+      const hasMembership = structureMemberships.some((m: any) => m.structure === structureId);
+
+      const needsUpdate = !hasStructure || !hasMembership || !('away' in currentValue);
+
+      if (needsUpdate) {
+        await ctx.db.patch(existingUserState._id, {
+          value: {
+            ...currentValue,
+            structures: hasStructure ? structures : [...structures, structureId],
+            structure_memberships: hasMembership
+              ? structureMemberships
+              : [...structureMemberships, { structure: structureId, roles: ["owner"] }],
+            away: currentValue.away ?? false,
+            away_timestamp: currentValue.away_timestamp ?? nowMs,
+            away_setter: currentValue.away_setter ?? 1,
+            vacation_mode: currentValue.vacation_mode ?? false,
+            manual_away_timestamp: currentValue.manual_away_timestamp ?? 0,
+          },
+          updatedAt: nowMs,
+          object_revision: (existingUserState.object_revision || 0) + 1,
+          object_timestamp: nowMs,
+        });
+      }
     }
 
     return { serial: entry.serial };
+  },
+});
+
+// Backfill structure_id for existing devices
+export const backfillStructureId = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const nowMs = Date.now();
+    let updatedCount = 0;
+
+    // Get all device owners
+    const allOwners = await ctx.db.query("deviceOwners").collect();
+
+    // Group devices by user for structure creation
+    const devicesByUser = new Map<string, string[]>();
+
+    for (const owner of allOwners) {
+      const userId = owner.userId.replace(/^user_/, "");
+      const structureId = `structure.${userId}`;
+      const structureKey = structureId;
+      const deviceKey = `device.${owner.serial}`;
+
+      // Track devices by user
+      if (!devicesByUser.has(userId)) {
+        devicesByUser.set(userId, []);
+      }
+      devicesByUser.get(userId)!.push(deviceKey);
+
+      // Check if device object exists and has structure_id
+      const deviceState = await ctx.db
+        .query("states")
+        .withIndex("by_key", (q) =>
+          q.eq("serial", owner.serial).eq("object_key", deviceKey)
+        )
+        .first();
+
+      if (!deviceState) {
+        // Create device object with structure_id (just userId, not "structure.userId")
+        await ctx.db.insert("states", {
+          serial: owner.serial,
+          object_key: deviceKey,
+          object_revision: 1,
+          object_timestamp: nowMs,
+          value: {
+            structure_id: userId,
+          },
+          updatedAt: nowMs,
+        });
+        updatedCount++;
+        console.log(`Created device object for ${owner.serial} with structure_id: ${userId}`);
+      } else if (!deviceState.value?.structure_id) {
+        // Update existing device object with structure_id (just userId, not "structure.userId")
+        await ctx.db.patch(deviceState._id, {
+          value: {
+            ...(deviceState.value || {}),
+            structure_id: userId,
+          },
+          updatedAt: nowMs,
+          object_revision: (deviceState.object_revision || 0) + 1,
+          object_timestamp: nowMs,
+        });
+        updatedCount++;
+        console.log(`Updated device ${owner.serial} with structure_id: ${userId}`);
+      }
+    }
+
+    // Create structure objects for each user
+    let structuresCreated = 0;
+    for (const [userId, devices] of devicesByUser.entries()) {
+      const structureId = `structure.${userId}`;
+      const structureKey = structureId;
+
+      // Use the first device's serial for the structure state
+      const firstDeviceSerial = devices[0].replace('device.', '');
+
+      // Check if structure already exists
+      const existingStructure = await ctx.db
+        .query("states")
+        .withIndex("by_key", (q) =>
+          q.eq("serial", firstDeviceSerial).eq("object_key", structureKey)
+        )
+        .first();
+
+      if (!existingStructure) {
+        await ctx.db.insert("states", {
+          serial: firstDeviceSerial,
+          object_key: structureKey,
+          object_revision: 1,
+          object_timestamp: nowMs,
+          value: {
+            time_zone: "America/Phoenix",
+            postal_code: "",
+            country_code: "US",
+            address_lines: [],
+            city: "",
+            state: "",
+            user: `user.${userId}`,
+            devices: devices,
+            away: false,
+            vacation_mode: false,
+            manual_away_timestamp: 0,
+            away_timestamp: nowMs,
+          },
+          updatedAt: nowMs,
+        });
+        structuresCreated++;
+        console.log(`Created structure ${structureId} with ${devices.length} devices`);
+      }
+    }
+
+    return {
+      success: true,
+      message: `Backfilled structure_id for ${updatedCount} devices and created ${structuresCreated} structures`,
+      devicesProcessed: allOwners.length,
+      devicesUpdated: updatedCount,
+      structuresCreated: structuresCreated,
+    };
+  },
+});
+
+// Update user state with weather data
+export const updateUserWeather = mutation({
+  args: {
+    serial: v.string(),
+    userId: v.string(), // clerkId with user_ prefix
+    weatherData: v.any(),
+  },
+  handler: async (ctx, args) => {
+    const nowMs = Date.now();
+    const userId = args.userId.replace(/^user_/, "");
+    const userStateKey = `user.${userId}`;
+
+    const existingUserState = await ctx.db
+      .query("states")
+      .withIndex("by_key", (q) =>
+        q.eq("serial", args.serial).eq("object_key", userStateKey)
+      )
+      .first();
+
+    if (existingUserState) {
+      const currentValue = existingUserState.value || {};
+      const updatedValue = {
+        ...currentValue,
+        weather: {
+          ...args.weatherData,
+          updatedAt: nowMs,
+        },
+      };
+
+      await ctx.db.patch(existingUserState._id, {
+        value: updatedValue,
+        updatedAt: nowMs,
+        object_revision: (existingUserState.object_revision || 0) + 1,
+        object_timestamp: nowMs,
+      });
+
+      return { updated: true };
+    }
+
+    return { updated: false, error: "User state not found" };
+  },
+});
+
+// Sync user weather from weather table using postal code from device
+export const syncUserWeatherFromDevice = mutation({
+  args: {
+    userId: v.string(), // clerkId with user_ prefix
+  },
+  handler: async (ctx, args) => {
+    const nowMs = Date.now();
+    const userId = args.userId.replace(/^user_/, "");
+
+    // Get all devices owned by this user
+    const ownedDevices = await ctx.db
+      .query("deviceOwners")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .collect();
+
+    if (ownedDevices.length === 0) {
+      return { updated: false, error: "No devices found" };
+    }
+
+    // Try to get postal_code from any device
+    let postalCode = null;
+    let country = "US";
+    let deviceSerial = null;
+
+    for (const deviceOwner of ownedDevices) {
+      const deviceKey = `device.${deviceOwner.serial}`;
+      const deviceState = await ctx.db
+        .query("states")
+        .withIndex("by_key", (q) =>
+          q.eq("serial", deviceOwner.serial).eq("object_key", deviceKey)
+        )
+        .first();
+
+      if (deviceState && deviceState.value && deviceState.value.postal_code) {
+        postalCode = deviceState.value.postal_code;
+        deviceSerial = deviceOwner.serial;
+        // Country might be in device state too, otherwise default to US
+        country = deviceState.value.country || "US";
+        break;
+      }
+    }
+
+    if (!postalCode || !deviceSerial) {
+      return { updated: false, error: "No postal code found in device state" };
+    }
+
+    // Fetch weather from weather table
+    const weather = await ctx.db
+      .query("weather")
+      .withIndex("by_location", (q) =>
+        q.eq("postalCode", postalCode).eq("country", country)
+      )
+      .first();
+
+    if (!weather || !weather.data) {
+      return { updated: false, error: "No weather data found for location" };
+    }
+
+    // Extract weather data
+    const locationKey = `${postalCode},${country}`;
+    const weatherInfo = weather.data[locationKey];
+
+    if (!weatherInfo || !weatherInfo.current) {
+      return { updated: false, error: "Invalid weather data format" };
+    }
+
+    // Update user state on all devices
+    const weatherDataToSave = {
+      current: weatherInfo.current,
+      location: weatherInfo.location,
+      updatedAt: nowMs,
+    };
+
+    let updatedCount = 0;
+    for (const deviceOwner of ownedDevices) {
+      const userStateKey = `user.${userId}`;
+      const existingUserState = await ctx.db
+        .query("states")
+        .withIndex("by_key", (q) =>
+          q.eq("serial", deviceOwner.serial).eq("object_key", userStateKey)
+        )
+        .first();
+
+      if (existingUserState) {
+        const currentValue = existingUserState.value || {};
+        const updatedValue = {
+          ...currentValue,
+          weather: weatherDataToSave,
+        };
+
+        await ctx.db.patch(existingUserState._id, {
+          value: updatedValue,
+          updatedAt: nowMs,
+          object_revision: (existingUserState.object_revision || 0) + 1,
+          object_timestamp: nowMs,
+        });
+
+        updatedCount++;
+      }
+    }
+
+    return {
+      updated: true,
+      postalCode,
+      country,
+      devicesUpdated: updatedCount,
+    };
+  },
+});
+
+// Update user away status based on all devices
+export const updateUserAwayStatus = mutation({
+  args: {
+    userId: v.string(), // clerkId with user_ prefix
+  },
+  handler: async (ctx, args) => {
+    const nowMs = Date.now();
+    const userId = args.userId.replace(/^user_/, "");
+
+    // Get all devices owned by this user
+    const ownedDevices = await ctx.db
+      .query("deviceOwners")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .collect();
+
+    if (ownedDevices.length === 0) {
+      return { updated: false, error: "No devices found" };
+    }
+
+    // Check away status for each device and find the most recent away change
+    let allAway = true;
+    let anyDeviceReported = false;
+    let mostRecentAwayTimestamp = 0;
+    let mostRecentAwaySetter = null;
+    let hasVacationMode = false;
+    let mostRecentManualAwayTimestamp = 0;
+
+    for (const deviceOwner of ownedDevices) {
+      const deviceKey = `device.${deviceOwner.serial}`;
+      const deviceState = await ctx.db
+        .query("states")
+        .withIndex("by_key", (q) =>
+          q.eq("serial", deviceOwner.serial).eq("object_key", deviceKey)
+        )
+        .first();
+
+      if (deviceState && deviceState.value) {
+        anyDeviceReported = true;
+        const away = deviceState.value.away;
+        const awayTimestamp = deviceState.value.away_timestamp || 0;
+        const awaySetter = deviceState.value.away_setter;
+        const vacationMode = deviceState.value.vacation_mode || false;
+        const manualAwayTimestamp = deviceState.value.manual_away_timestamp || 0;
+
+        // Track vacation mode
+        if (vacationMode) {
+          hasVacationMode = true;
+        }
+
+        // Track most recent timestamps
+        if (awayTimestamp > mostRecentAwayTimestamp) {
+          mostRecentAwayTimestamp = awayTimestamp;
+        }
+        if (manualAwayTimestamp > mostRecentManualAwayTimestamp) {
+          mostRecentManualAwayTimestamp = manualAwayTimestamp;
+          mostRecentAwaySetter = awaySetter;
+        }
+
+        // If any device reports away as false (0 or false), user is not away
+        if (away === 0 || away === false) {
+          allAway = false;
+          break;
+        }
+      }
+    }
+
+    // If no devices reported status, default to not away
+    const userAway = anyDeviceReported ? allAway : false;
+
+    // Update user state on each device with full away information
+    let updatedCount = 0;
+    for (const deviceOwner of ownedDevices) {
+      const userStateKey = `user.${userId}`;
+      const existingUserState = await ctx.db
+        .query("states")
+        .withIndex("by_key", (q) =>
+          q.eq("serial", deviceOwner.serial).eq("object_key", userStateKey)
+        )
+        .first();
+
+      if (existingUserState) {
+        const currentValue = existingUserState.value || {};
+        const updatedValue: any = {
+          ...currentValue,
+          away: userAway,
+          vacation_mode: hasVacationMode,
+        };
+
+        // Only include timestamps if they have valid values
+        if (mostRecentAwayTimestamp > 0) {
+          updatedValue.away_timestamp = mostRecentAwayTimestamp;
+        }
+        if (mostRecentAwaySetter !== null) {
+          updatedValue.away_setter = mostRecentAwaySetter;
+        }
+        if (mostRecentManualAwayTimestamp > 0) {
+          updatedValue.manual_away_timestamp = mostRecentManualAwayTimestamp;
+        }
+
+        await ctx.db.patch(existingUserState._id, {
+          value: updatedValue,
+          updatedAt: nowMs,
+          object_revision: (existingUserState.object_revision || 0) + 1,
+          object_timestamp: nowMs,
+        });
+
+        updatedCount++;
+      }
+    }
+
+    return {
+      updated: true,
+      away: userAway,
+      away_timestamp: mostRecentAwayTimestamp,
+      away_setter: mostRecentAwaySetter,
+      vacation_mode: hasVacationMode,
+      manual_away_timestamp: mostRecentManualAwayTimestamp,
+      devicesUpdated: updatedCount,
+    };
+  },
+});
+
+// Update weather for all users who have devices with this postal code
+export const updateWeatherForPostalCode = mutation({
+  args: {
+    postalCode: v.string(),
+    country: v.string(),
+    weatherData: v.any(),
+  },
+  handler: async (ctx, args) => {
+    const nowMs = Date.now();
+
+    // Find all devices with this postal code
+    const allStates = await ctx.db.query("states").collect();
+    const deviceStates = allStates.filter(
+      (state) =>
+        state.object_key.startsWith("device.") &&
+        state.value?.postal_code === args.postalCode &&
+        state.value?.country === args.country
+    );
+
+    if (deviceStates.length === 0) {
+      return { updated: false, usersUpdated: 0 };
+    }
+
+    // Get unique device serials
+    const deviceSerials = [...new Set(deviceStates.map((s) => s.serial))];
+
+    // For each device, find its owner and update their weather
+    const updatedUsers = new Set<string>();
+
+    for (const serial of deviceSerials) {
+      const deviceOwner = await ctx.db
+        .query("deviceOwners")
+        .withIndex("by_serial", (q) => q.eq("serial", serial))
+        .first();
+
+      if (!deviceOwner) continue;
+
+      const userId = deviceOwner.userId.replace(/^user_/, "");
+      const userStateKey = `user.${userId}`;
+
+      // Get all devices for this user
+      const userDevices = await ctx.db
+        .query("deviceOwners")
+        .withIndex("by_user", (q) => q.eq("userId", deviceOwner.userId))
+        .collect();
+
+      // Update weather on all user's devices
+      for (const userDevice of userDevices) {
+        const existingUserState = await ctx.db
+          .query("states")
+          .withIndex("by_key", (q) =>
+            q.eq("serial", userDevice.serial).eq("object_key", userStateKey)
+          )
+          .first();
+
+        if (existingUserState) {
+          const currentValue = existingUserState.value || {};
+          const updatedValue = {
+            ...currentValue,
+            weather: {
+              ...args.weatherData,
+              updatedAt: nowMs,
+            },
+          };
+
+          await ctx.db.patch(existingUserState._id, {
+            value: updatedValue,
+            updatedAt: nowMs,
+            object_revision: (existingUserState.object_revision || 0) + 1,
+            object_timestamp: nowMs,
+          });
+        }
+      }
+
+      updatedUsers.add(deviceOwner.userId);
+    }
+
+    return {
+      updated: true,
+      usersUpdated: updatedUsers.size,
+      devicesFound: deviceSerials.length,
+    };
   },
 });
 
@@ -248,11 +884,34 @@ export const listUserDevices = query({
   },
 });
 
+// Get device owner by serial number
+export const getDeviceOwner = query({
+  args: {
+    serial: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const owner = await ctx.db
+      .query("deviceOwners")
+      .withIndex("by_serial", (q) => q.eq("serial", args.serial))
+      .first();
+
+    if (!owner) {
+      return null;
+    }
+
+    return {
+      userId: owner.userId,
+      serial: owner.serial,
+      linkedAt: owner.createdAt,
+    };
+  },
+});
+
 // Cron job: Clean up expired entry keys
 export const cleanupExpiredKeys = internalMutation({
   args: {},
   handler: async (ctx) => {
-    const nowSeconds = Math.floor(Date.now() / 1000);
+    const nowMs = Date.now();
 
     // Get all entry keys
     const allKeys = await ctx.db.query("entryKeys").collect();
@@ -260,7 +919,7 @@ export const cleanupExpiredKeys = internalMutation({
     let deletedCount = 0;
     for (const key of allKeys) {
       // Delete if expired (regardless of claimed status)
-      if (key.expiresAt <= nowSeconds) {
+      if (key.expiresAt <= nowMs) {
         await ctx.db.delete(key._id);
         deletedCount++;
       }
@@ -280,31 +939,6 @@ export const ensureDeviceAlertDialog = mutation({
     let dialogCreated = false;
     let userCreated = false;
 
-    // Check if alert dialog state already exists
-    const alertDialogKey = `device_alert_dialog.${args.serial}`;
-    const existingAlertDialog = await ctx.db
-      .query("states")
-      .withIndex("by_key", (q) =>
-        q.eq("serial", args.serial).eq("object_key", alertDialogKey)
-      )
-      .first();
-
-    if (!existingAlertDialog) {
-      // Create the alert dialog state
-      await ctx.db.insert("states", {
-        serial: args.serial,
-        object_key: alertDialogKey,
-        object_revision: 1,
-        object_timestamp: nowMs,
-        value: {
-          dialog_data: "",
-          dialog_id: "confirm-pairing"
-        },
-        updatedAt: nowMs,
-      });
-      dialogCreated = true;
-    }
-
     // Check if this device has an owner and create user state if needed
     const deviceOwner = await ctx.db
       .query("deviceOwners")
@@ -321,6 +955,32 @@ export const ensureDeviceAlertDialog = mutation({
       const userEmail = userRecord?.email ?? "";
       const userId = deviceOwner.userId.replace(/^user_/, "");
       const userStateKey = `user.${userId}`;
+      const structureId = `structure.${userId}`;
+
+      // Check if alert dialog state already exists
+      const alertDialogKey = `device_alert_dialog.${args.serial}`;
+      const existingAlertDialog = await ctx.db
+        .query("states")
+        .withIndex("by_key", (q) =>
+          q.eq("serial", args.serial).eq("object_key", alertDialogKey)
+        )
+        .first();
+
+      if (!existingAlertDialog) {
+        // Create the alert dialog state
+        await ctx.db.insert("states", {
+          serial: args.serial,
+          object_key: alertDialogKey,
+          object_revision: 1,
+          object_timestamp: nowMs,
+          value: {
+            dialog_data: "",
+            dialog_id: "confirm-pairing"
+          },
+          updatedAt: nowMs,
+        });
+        dialogCreated = true;
+      }
 
       // Check if user state already exists
       const existingUserState = await ctx.db
@@ -343,8 +1003,10 @@ export const ensureDeviceAlertDialog = mutation({
             obsidian_version: "5.58rc3",
             profile_image_url: "",
             short_name: "",
+            structures: [structureId],
             structure_memberships: [
               {
+                structure: structureId,
                 roles: ["owner"],
               },
             ],
@@ -410,6 +1072,7 @@ export const backfillDeviceAlertDialogs = mutation({
       const userEmail = userRecord?.email ?? "";
       const userId = device.userId.replace(/^user_/, "");
       const userStateKey = `user.${userId}`;
+      const structureId = `structure.${userId}`;
 
       const existingUserState = await ctx.db
         .query("states")
@@ -431,8 +1094,10 @@ export const backfillDeviceAlertDialogs = mutation({
             obsidian_version: "5.58rc3",
             profile_image_url: "",
             short_name: "",
+            structures: [structureId],
             structure_memberships: [
               {
+                structure: structureId,
                 roles: ["owner"],
               },
             ],
@@ -453,5 +1118,117 @@ export const backfillDeviceAlertDialogs = mutation({
       usersSkipped,
       total: allDevices.length
     };
+  },
+});
+
+// Get user by ID (for server-side use)
+export const getUserById = query({
+  args: {
+    userId: v.string(), // clerkId with user_ prefix
+  },
+  handler: async (ctx, args) => {
+    const userId = args.userId.replace(/^user_/, "");
+
+    // Get user's devices
+    const devices = await ctx.db
+      .query("deviceOwners")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .collect();
+
+    if (devices.length === 0) {
+      return null;
+    }
+
+    // Get user state from first device
+    const userStateKey = `user.${userId}`;
+    const userState = await ctx.db
+      .query("states")
+      .withIndex("by_key", (q) =>
+        q.eq("serial", devices[0].serial).eq("object_key", userStateKey)
+      )
+      .first();
+
+    return userState?.value || null;
+  },
+});
+
+// Query to check if weather needs refresh
+export const checkWeatherFreshness = query({
+  args: {
+    userId: v.string(), // clerkId with user_ prefix
+  },
+  handler: async (ctx, args) => {
+    const TEN_MINUTES_MS = 10 * 60 * 1000;
+    const nowMs = Date.now();
+    const userId = args.userId.replace(/^user_/, "");
+
+    // Get user's devices
+    const devices = await ctx.db
+      .query("deviceOwners")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .collect();
+
+    if (devices.length === 0) {
+      return { needsRefresh: false, reason: "No devices found" };
+    }
+
+    // Get user state from first device
+    const userStateKey = `user.${userId}`;
+    const userState = await ctx.db
+      .query("states")
+      .withIndex("by_key", (q) =>
+        q.eq("serial", devices[0].serial).eq("object_key", userStateKey)
+      )
+      .first();
+
+    const weather = userState?.value?.weather;
+    if (!weather || !weather.updatedAt || nowMs - weather.updatedAt > TEN_MINUTES_MS) {
+      return {
+        needsRefresh: true,
+        reason: weather ? "Weather is stale" : "No weather data",
+        ageMs: weather?.updatedAt ? nowMs - weather.updatedAt : undefined,
+      };
+    }
+
+    return {
+      needsRefresh: false,
+      reason: "Weather is fresh",
+      ageMs: nowMs - weather.updatedAt,
+    };
+  },
+});
+
+// Action to refresh weather from Nest API
+export const refreshWeatherFromAPI = action({
+  args: {
+    postalCode: v.string(),
+    country: v.string(),
+  },
+  handler: async (ctx, args): Promise<{ success: boolean; error?: string }> => {
+    const nowMs = Date.now();
+
+    try {
+      const weatherUrl = `https://weather.nest.com/weather/v1?query=${args.postalCode},${args.country}`;
+      const response = await fetch(weatherUrl);
+
+      if (!response.ok) {
+        return { success: false, error: "Weather API error" };
+      }
+
+      const weatherData = await response.json();
+      const locationKey = `${args.postalCode},${args.country}`;
+      const weatherInfo = weatherData[locationKey];
+
+      if (weatherInfo && weatherInfo.current) {
+        // Update weather in database - need to use internal API
+        // For now, return success and let the mutation be called from client
+        return { success: true };
+      }
+
+      return { success: false, error: "Invalid weather data" };
+    } catch (err) {
+      const error = err as Error;
+      return { success: false, error: error.message };
+    }
   },
 });

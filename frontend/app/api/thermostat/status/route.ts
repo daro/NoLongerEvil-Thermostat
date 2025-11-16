@@ -5,6 +5,7 @@ import {
   fetchConvexState,
   listConvexUserDevices,
   getWeatherBySerial,
+  syncUserWeatherFromDevice,
 } from '@/lib/server/convex';
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8081';
@@ -140,10 +141,36 @@ export async function GET(request: NextRequest) {
     } catch {
     }
 
-    const deviceRecords = await listConvexUserDevices(userId);
-    let serials = deviceRecords
+    // Get owned devices
+    const ownedDevices = await listConvexUserDevices(userId);
+    const ownedSerials = ownedDevices
       .map((record) => record?.serial)
       .filter((serial): serial is string => Boolean(serial));
+
+    // Get shared devices
+    const convexClient = await getConvexClient();
+    const sharedDevices = convexClient
+      ? await convexClient.query('shares:getSharedWithMe' as any, { userId })
+      : [];
+    const sharedSerials = sharedDevices.map((share: any) => share.serial);
+
+    // Combine
+    let serials = [...new Set([...ownedSerials, ...sharedSerials])];
+
+    // Store share metadata for enrichment later
+    const shareMetadata: Record<string, { isOwner: boolean; sharedBy?: string; permissions?: string[] }> = {};
+
+    ownedSerials.forEach(serial => {
+      shareMetadata[serial] = { isOwner: true };
+    });
+
+    sharedDevices.forEach((share: any) => {
+      shareMetadata[share.serial] = {
+        isOwner: false,
+        sharedBy: share.ownerEmail,
+        permissions: share.permissions,
+      };
+    });
 
     if (serializedParam) {
       serials = serials.filter((serial) => serial === serializedParam);
@@ -156,15 +183,11 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(emptyState());
     }
 
-    for (const serial of serials) {
-      try {
-        await fetch(`${BACKEND_URL}/status?serial=${encodeURIComponent(serial)}`, {
-          method: 'GET',
-          headers: { 'Content-Type': 'application/json' },
-          cache: 'no-store',
-        });
-      } catch {
-      }
+    // Sync weather from device postal code to user state
+    try {
+      await syncUserWeatherFromDevice(userId);
+    } catch (error) {
+      console.error('[API] Failed to sync user weather:', error);
     }
 
     const convexData = await fetchConvexState();
@@ -187,4 +210,18 @@ export async function GET(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+async function getConvexClient() {
+  const CONVEX_URL = process.env.CONVEX_URL ?? process.env.NEXT_PUBLIC_CONVEX_URL;
+  const CONVEX_ADMIN_KEY = process.env.CONVEX_ADMIN_KEY;
+
+  if (!CONVEX_URL) return null;
+
+  const { ConvexHttpClient } = await import("convex/browser");
+  const client = new ConvexHttpClient(CONVEX_URL);
+  if (CONVEX_ADMIN_KEY) {
+    (client as any).setAdminAuth(CONVEX_ADMIN_KEY);
+  }
+  return client;
 }

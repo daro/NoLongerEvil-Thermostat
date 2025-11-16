@@ -89,9 +89,29 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Check ownership
     const ownedDevices = await listConvexUserDevices(userId);
-    if (!ownedDevices.some((device) => device.serial === serial)) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    const isOwner = ownedDevices.some((device) => device.serial === serial);
+
+    if (!isOwner) {
+      // Check if device is shared with control permission
+      const convexClient = await getConvexClient();
+      if (!convexClient) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      }
+
+      const accessCheck = await convexClient.query('shares:checkDeviceAccess' as any, {
+        userId,
+        serial,
+        requiredPermission: 'control',
+      });
+
+      if (!accessCheck.hasAccess) {
+        return NextResponse.json(
+          { error: 'Forbidden - you do not have control access to this device' },
+          { status: 403 }
+        );
+      }
     }
 
     const action = String(body.action).toLowerCase();
@@ -145,4 +165,18 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+async function getConvexClient() {
+  const CONVEX_URL = process.env.CONVEX_URL ?? process.env.NEXT_PUBLIC_CONVEX_URL;
+  const CONVEX_ADMIN_KEY = process.env.CONVEX_ADMIN_KEY;
+
+  if (!CONVEX_URL) return null;
+
+  const { ConvexHttpClient } = await import("convex/browser");
+  const client = new ConvexHttpClient(CONVEX_URL);
+  if (CONVEX_ADMIN_KEY) {
+    (client as any).setAdminAuth(CONVEX_ADMIN_KEY);
+  }
+  return client;
 }

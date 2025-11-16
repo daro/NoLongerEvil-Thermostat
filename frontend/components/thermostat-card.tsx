@@ -1,11 +1,9 @@
 "use client";
 
-import { useState } from "react";
 import { motion } from "framer-motion";
-import { Thermometer, Droplets, Wind, Settings, Flame, Snowflake, Gauge, Power } from "lucide-react";
+import { Thermometer, Droplets, Wind, Flame, Snowflake, Gauge, Power } from "lucide-react";
 import type { DeviceData } from "@/lib/store";
 import { celsiusToFahrenheit } from "@/lib/utils/temperature";
-import { ThermostatSettingsDialog } from "./thermostat-settings-dialog";
 
 interface ThermostatCardProps {
   device: DeviceData;
@@ -15,7 +13,7 @@ interface ThermostatCardProps {
 
 function formatTemp(value: number | null | undefined, scale: "C" | "F") {
   if (value === null || value === undefined || Number.isNaN(value)) return "--";
-  return `${Math.round(value)}\u00B0${scale}`;
+  return `${Math.round(value)}\u00B0`;
 }
 
 function formatHumidity(value: number | null | undefined) {
@@ -24,7 +22,6 @@ function formatHumidity(value: number | null | undefined) {
 }
 
 export function ThermostatCard({ device, onClick, index }: ThermostatCardProps) {
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const tempValue = device.insideTemp ?? device.currentTemp ?? device.setpoint ?? null;
 
   const getTempGradient = () => {
@@ -159,26 +156,13 @@ export function ThermostatCard({ device, onClick, index }: ThermostatCardProps) 
 
       <div className="relative z-10 h-full flex flex-col">
         <div className="mb-4">
-          <div className="flex items-start justify-between">
-            <div className="flex-1">
-              <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
-                {device.name || "Thermostat"}
-              </h3>
-              <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-0.5 font-mono">
-                {device.serial}
-              </p>
-            </div>
-            <button
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setSettingsOpen(true);
-              }}
-              className="p-2 rounded-lg hover:bg-zinc-100 dark:hover:bg-slate-700/50 transition-colors cursor-pointer"
-              aria-label="Settings"
-            >
-              <Settings className="h-4 w-4 text-zinc-500 dark:text-zinc-400" />
-            </button>
+          <div className="text-center">
+            <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+              {device.name || "Thermostat"}
+            </h3>
+            <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-0.5 font-mono">
+              {device.serial}
+            </p>
           </div>
         </div>
 
@@ -235,12 +219,6 @@ export function ThermostatCard({ device, onClick, index }: ThermostatCardProps) 
           style={{ originX: 0 }}
         />
       </div>
-
-      <ThermostatSettingsDialog
-        device={device}
-        open={settingsOpen}
-        onOpenChange={setSettingsOpen}
-      />
     </motion.div>
   );
 }

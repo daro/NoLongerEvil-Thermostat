@@ -41,6 +41,36 @@ export async function POST(request: NextRequest) {
 
     const result = await claimConvexEntryKey(normalizedCode, userId);
 
+    // Notify the thermostat about the updated state so it knows it's been paired
+    if (result?.serial) {
+      try {
+        const apiUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8081';
+        const userIdShort = userId.replace(/^user_/, '');
+        const userKey = `user.${userIdShort}`;
+        const deviceKey = `device.${result.serial}`;
+        const structureKey = `structure.${userIdShort}`;
+        const linkKey = `link.${result.serial}`;
+        const alertDialogKey = `device_alert_dialog.${result.serial}`;
+
+        // Notify the server to push all pairing-related state objects to the device
+        // The server will load the full objects (with values, revision, timestamp) from Convex
+        // and send them to the device if it's subscribed
+        await fetch(`${apiUrl}/notify-device`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            serial: result.serial,
+            objectKeys: [userKey, deviceKey, structureKey, linkKey, alertDialogKey]
+          })
+        }).catch(err => {
+          console.error('[API] Failed to notify device about pairing:', err.message);
+        });
+      } catch (notifyErr) {
+        console.error('[API] Failed to notify device:', notifyErr);
+        // Don't fail the claim if notification fails
+      }
+    }
+
     return NextResponse.json({ success: true, serial: result?.serial });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';

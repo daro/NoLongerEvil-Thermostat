@@ -70,7 +70,7 @@ Save the admin key that is generated.
 
 ### Step 5: Configure Environment Variables
 
-**Server** (`server/.env.local`):
+**Server** (`server/.env`):
 ```bash
 CONVEX_URL=http://localhost:3210
 CONVEX_ADMIN_KEY=<admin-key-from-step-4>
@@ -135,6 +135,13 @@ The firmware installation process installs three components:
 
 After flashing, the device jumps to execution at 0x80100000 (u-boot).
 
+## Security Considerations
+
+This tool provides low-level access to the device's boot process. Use responsibly:
+
+- Only use on devices you own
+- Improper firmware can brick your device (Don't sue me bro)
+
 ## Credits & Acknowledgments
 
 This project builds upon the excellent work of several security researchers and developers:
@@ -146,13 +153,13 @@ This project builds upon the excellent work of several security researchers and 
 
 Without their groundbreaking research, open-source contributions, and advocacy for device ownership rights, this work would not be possible. Thank you!
 
-## Open Source Commitment
+### Open Source Commitment
 
 We are committed to transparency and the right-to-repair movement. This project is now fully open source, allowing the community to audit, improve, and self-host their own infrastructure.
 
 ## Support
 
-This project is sponsored by the team at:
+This project is sponsored by and made by the team at:
 
 <p align="center">
   <a href="https://hackhouse.io" target="_blank">
@@ -168,4 +175,4 @@ This project is sponsored by the team at:
 
 ## License
 
-No Longer Evil is MIT licensed.
+No Longer Evil is [MIT licensed](LICENSE).

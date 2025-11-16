@@ -66,6 +66,9 @@ module.exports = {
   async listUserDevices({ userId }) {
     return call('users:listUserDevices', { userId });
   },
+  async getDeviceOwner({ serial }) {
+    return call('users:getDeviceOwner', { serial });
+  },
   async generateEntryKey({ serial, ttlSeconds }) {
     return call('users:generateEntryKey', { serial, ttlSeconds });
   },
@@ -80,5 +83,20 @@ module.exports = {
   },
   async upsertWeather({ postalCode, country, fetchedAt, data }) {
     return call('weather:upsertWeather', { postalCode, country, fetchedAt, data });
+  },
+  async updateUserWeather({ serial, userId, weatherData }) {
+    return call('users:updateUserWeather', { serial, userId, weatherData });
+  },
+  async syncUserWeatherFromDevice({ userId }) {
+    return call('users:syncUserWeatherFromDevice', { userId });
+  },
+  async updateUserAwayStatus({ userId }) {
+    return call('users:updateUserAwayStatus', { userId });
+  },
+  async updateWeatherForPostalCode({ postalCode, country, weatherData }) {
+    return call('users:updateWeatherForPostalCode', { postalCode, country, weatherData });
+  },
+  async backfillStructureId() {
+    return call('users:backfillStructureId', {});
   }
 };

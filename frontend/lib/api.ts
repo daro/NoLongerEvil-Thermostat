@@ -266,6 +266,45 @@ class ThermostatAPI {
     });
   }
 
+  async setTemperatureLock(
+    serial: string,
+    enabled: boolean,
+    pinHash?: string,
+    lowTemp?: number,
+    highTemp?: number
+  ) {
+    if (enabled) {
+      if (!pinHash || lowTemp === undefined || highTemp === undefined) {
+        throw new Error("PIN hash and temperature range are required when enabling lock");
+      }
+
+      return this.sendCommand({
+        serial,
+        action: "set",
+        field: "temperature_lock",
+        value: {
+          temperature_lock: true,
+          temperature_lock_pin_hash: pinHash,
+          temperature_lock_low_temp: lowTemp,
+          temperature_lock_high_temp: highTemp,
+        },
+        object: `device.${serial}`,
+      });
+    } else {
+      // Unlock - clear the PIN hash and disable lock
+      return this.sendCommand({
+        serial,
+        action: "set",
+        field: "temperature_lock",
+        value: {
+          temperature_lock: false,
+          temperature_lock_pin_hash: "",
+        },
+        object: `device.${serial}`,
+      });
+    }
+  }
+
   async deleteDevice(serial: string): Promise<CommandResponse> {
     const response = await fetch(`${this.baseUrl}/device/${serial}`, {
       method: "DELETE",

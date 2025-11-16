@@ -84,6 +84,7 @@ export const getAllState = query({
       devices.add(serial);
       const bucket = (deviceState[serial] ||= {});
       bucket[row.object_key] = {
+        object_key: row.object_key, // Include object_key in the response
         object_revision: row.object_revision,
         object_timestamp: row.object_timestamp,
         value: row.value,

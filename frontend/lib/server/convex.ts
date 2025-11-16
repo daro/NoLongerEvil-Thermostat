@@ -138,3 +138,8 @@ export async function ensureDeviceAlertDialog(serial: string): Promise<any> {
   if (!serial) return null;
   return tryMutation("users:ensureDeviceAlertDialog", { serial });
 }
+
+export async function syncUserWeatherFromDevice(userId: string): Promise<any> {
+  if (!userId) return null;
+  return tryMutation("users:syncUserWeatherFromDevice", { userId });
+}
