@@ -90,6 +90,7 @@ tmp/
 temp/
 *.tmp
 .cache/
+firmware_build.log
 
 # Electron build artifacts
 out/
@@ -131,3 +132,9 @@ coverage/
 # Next.js
 .next/
 next-env.d.ts
+
+# Convex
+**/convex/_generated/
+
+# Firmware build artifacts
+firmware/builder/firmware/

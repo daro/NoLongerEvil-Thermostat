@@ -1,0 +1,78 @@
+name: Build Electron App
+
+on:
+  push:
+    branches:
+      - open-source-prototype
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: "18"
+          cache: "npm"
+          cache-dependency-path: firmware/installer/package-lock.json
+
+      - name: Install dependencies
+        working-directory: firmware/installer
+        run: npm ci
+
+      - name: Build Vite app
+        working-directory: firmware/installer
+        run: npm run build
+
+      - name: Prepare for app notarization
+        if: matrix.os == 'macos-latest'
+        run: |
+          mkdir -p ~/private_keys/
+          echo '${{ secrets.API_KEY }}' > ~/private_keys/AuthKey_${{ secrets.API_KEY_ID }}.p8
+
+      - name: Build Electron app (macOS - zip only)
+        if: matrix.os == 'macos-latest'
+        uses: samuelmeuli/action-electron-builder@v1
+        env:
+          API_KEY_ID: ${{ secrets.API_KEY_ID }}
+          API_KEY_ISSUER_ID: ${{ secrets.API_KEY_ISSUER_ID }}
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          package_root: firmware/installer
+          mac_certs: ${{ secrets.MAC_CERTS }}
+          mac_certs_password: ${{ secrets.MAC_CERTS_PASSWORD }}
+          skip_build: false
+          args: --mac zip --publish never
+
+      - name: Upload artifacts (macOS)
+        if: matrix.os == 'macos-latest'
+        uses: actions/upload-artifact@v3
+        with:
+          name: electron-app-macos
+          path: |
+            firmware/installer/dist/*.zip
+
+      - name: Build Electron app (Linux - AppImage only)
+        if: matrix.os == 'ubuntu-latest'
+        uses: samuelmeuli/action-electron-builder@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          package_root: firmware/installer
+          skip_build: false
+          args: --linux AppImage --publish never
+
+      - name: Upload artifacts (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v3
+        with:
+          name: electron-app-linux
+          path: |
+            firmware/installer/dist/*.AppImage

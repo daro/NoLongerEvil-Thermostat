@@ -255,18 +255,37 @@ check_dependencies() {
 setup_dependencies() {
   print_section "Setting Up Build Dependencies"
 
-  if [ ! -d "deps/toolchain/arm-2008q3" ] || \
-     [ ! -d "deps/x-loader" ] || \
-     [ ! -d "deps/u-boot" ] || \
-     [ ! -d "deps/linux" ]; then
-    print_info "Downloading build dependencies (this may take a while)..."
-    echo
-    bash scripts/download-deps.sh
-  else
-    print_success "Build dependencies already present"
+  local need_download=false
+  local download_args=""
+
+  if [ ! -d "deps/toolchain/arm-2008q3" ]; then
+    need_download=true
   fi
 
-  if [ ! -f "deps/initramfs_data.cpio" ]; then
+  if [ "$BUILD_XLOADER" = true ] && [ ! -d "deps/x-loader" ]; then
+    need_download=true
+    download_args="$download_args --xloader"
+  fi
+
+  if [ "$BUILD_UBOOT" = true ] && [ ! -d "deps/u-boot" ]; then
+    need_download=true
+    download_args="$download_args --uboot"
+  fi
+
+  if [ "$NEED_CUSTOM_BUILD" = true ]; then
+    need_download=true
+    download_args="$download_args --linux"
+  fi
+
+  if [ "$need_download" = true ]; then
+    print_info "Downloading required build dependencies (this may take a while)..."
+    echo
+    bash scripts/download-deps.sh $download_args
+  else
+    print_success "All required build dependencies already present"
+  fi
+
+  if [ "$NEED_CUSTOM_BUILD" = true ] && [ ! -f "deps/initramfs_data.cpio" ]; then
     print_error "Base initramfs not found at deps/initramfs_data.cpio"
     echo "This file should be included with the builder package."
     exit 1
@@ -293,20 +312,30 @@ configure_build() {
     echo
   fi
 
-  if [ "$NON_INTERACTIVE" = false ] && [ "$BUILD_XLOADER_SET" != true ]; then
-    echo -e "${BOLD}Bootloader Options:${NC}"
-    echo "Building from source is only needed if you're modifying bootloader code."
-    echo "Pre-compiled binaries are available and recommended for most users."
-    echo
+  if [ "$BUILD_XLOADER_SET" != true ]; then
+    if [ -f "$FIRMWARE_DIR/x-load.bin" ]; then
+      BUILD_XLOADER=false
+      print_info "Found existing x-load.bin, will use it"
+    elif [ "$NON_INTERACTIVE" = false ]; then
+      echo -e "${BOLD}Bootloader Options:${NC}"
+      echo "Building from source is only needed if you're modifying bootloader code."
+      echo "Pre-compiled binaries are available and recommended for most users."
+      echo
 
-    if ask_yes_no "Build x-loader from source?" "n"; then
-      BUILD_XLOADER=true
+      if ask_yes_no "Build x-loader from source?" "n"; then
+        BUILD_XLOADER=true
+      fi
     fi
   fi
 
-  if [ "$NON_INTERACTIVE" = false ] && [ "$BUILD_UBOOT_SET" != true ]; then
-    if ask_yes_no "Build u-boot from source?" "n"; then
-      BUILD_UBOOT=true
+  if [ "$BUILD_UBOOT_SET" != true ]; then
+    if [ -f "$FIRMWARE_DIR/u-boot.bin" ]; then
+      BUILD_UBOOT=false
+      print_info "Found existing u-boot.bin, will use it"
+    elif [ "$NON_INTERACTIVE" = false ]; then
+      if ask_yes_no "Build u-boot from source?" "n"; then
+        BUILD_UBOOT=true
+      fi
     fi
   fi
 
@@ -319,9 +348,13 @@ configure_build() {
     API_URL=$(ask_input "Enter API URL" "$API_URL")
   fi
 
-  NEED_CUSTOM_BUILD=false
-  if [ "$API_URL" != "$DEFAULT_API_URL" ] || [ "$FORCE_BUILD" = true ]; then
-    NEED_CUSTOM_BUILD=true
+  if [ "$NEED_CUSTOM_BUILD" != true ]; then
+    if [ "$API_URL" != "$DEFAULT_API_URL" ]; then
+      NEED_CUSTOM_BUILD=true
+    elif [ ! -f "$FIRMWARE_DIR/uImage" ]; then
+      NEED_CUSTOM_BUILD=true
+      print_info "uImage not found, will build kernel from source"
+    fi
   fi
 
   echo
@@ -345,20 +378,20 @@ configure_build() {
 
 build_firmware() {
   print_section "Building Firmware"
-
+  
   if [ "$BUILD_XLOADER" = true ]; then
     rm -f "$SCRIPT_DIR/firmware/x-load.bin" 2>/dev/null || true
-    rm -f "$SCRIPT_DIR/../installer/bin/x-load.bin" 2>/dev/null || true
+    rm -f "$SCRIPT_DIR/../installer/resources/firmware/x-load.bin" 2>/dev/null || true
   fi
 
   if [ "$BUILD_UBOOT" = true ]; then
     rm -f "$SCRIPT_DIR/firmware/u-boot.bin" 2>/dev/null || true
-    rm -f "$SCRIPT_DIR/../installer/bin/u-boot.bin" 2>/dev/null || true
+    rm -f "$SCRIPT_DIR/../installer/resources/firmware/u-boot.bin" 2>/dev/null || true
   fi
 
   if [ "$NEED_CUSTOM_BUILD" = true ]; then
     rm -f "$SCRIPT_DIR/firmware/uImage" 2>/dev/null || true
-    rm -f "$SCRIPT_DIR/../installer/bin/uImage" 2>/dev/null || true
+    rm -f "$SCRIPT_DIR/../installer/resources/firmware/uImage" 2>/dev/null || true
   fi
 
   if [ "$BUILD_XLOADER" = true ] || [ "$BUILD_UBOOT" = true ]; then
@@ -383,29 +416,209 @@ build_firmware() {
   fi
 
   if [ "$NEED_CUSTOM_BUILD" = true ]; then
-    print_info "Building custom kernel with logo only (using NestDFUAttack base initramfs)..."
     echo
-    
-    # DEBUG TEST: Extract and repack to see if repack process breaks it
-    print_info "DEBUG TEST: Extracting and repacking NestDFUAttack cpio to test repack process..."
+    print_section "Building Custom Kernel"
+    print_info "Building custom kernel with custom initramfs..."
+    echo
 
+    print_info "Extracting initramfs from NestDFUAttack base..."
     rm -rf "$SCRIPT_DIR/deps/root"
     mkdir -p "$SCRIPT_DIR/deps/root"
     cd "$SCRIPT_DIR/deps/root"
     cpio -id < "$SCRIPT_DIR/deps/initramfs_data.cpio" 2>/dev/null
-    print_success "Extracted original NestDFUAttack cpio"
+    print_success "Extracted initramfs to: deps/root/"
+
+    cd "$SCRIPT_DIR"
+    print_info "Configuring NoLongerEvil settings..."
+
+    ENTRY_URL="$API_URL"
+    if [[ ! "$ENTRY_URL" =~ /entry$ ]]; then
+      ENTRY_URL="${ENTRY_URL}/entry"
+    fi
+
+    ROOTME_SCRIPT="$SCRIPT_DIR/deps/root/etc/init.d/rootme"
+    if [ -f "$ROOTME_SCRIPT" ]; then
+      print_info "Generating dynamic rootme script..."
+
+      if [ "$ENABLE_ROOT_ACCESS" = true ]; then
+        ROOT_PASSWORD=$(openssl rand -base64 18 | tr -d '/+=' | head -c 18)
+        ROOT_HASH=$(openssl passwd -crypt "$ROOT_PASSWORD")
+        print_success "Generated root password: $ROOT_PASSWORD"
+      fi
+
+      CA_CERT_CONTENT=""
+      USE_CUSTOM_CERT=false
+      if [ "$API_URL" != "https://backdoor.nolongerevil.com" ] && [ -f "/server/certs/ca-cert.pem" ]; then
+        CA_CERT_CONTENT=$(cat /server/certs/ca-cert.pem)
+        USE_CUSTOM_CERT=true
+        print_success "Loaded custom CA certificate for embedding"
+      fi
+
+      cat > "$ROOTME_SCRIPT" << ROOTME_EOF
+#!/bin/sh
+set +e
+mkdir -p /tmp/1 || true
+mount /dev/mtdblock7 /tmp/1 -tjffs2 || true
+
+ROOTME_EOF
+
+      if [ "$ENABLE_ROOT_ACCESS" = true ]; then
+        cat >> "$ROOTME_SCRIPT" << 'ROOTME_EOF'
+cp /bin/busybox2 /tmp/1/bin/busybox2 || true
+cp /bin/autossh /tmp/1/bin/autossh || true
+chmod 777 /tmp/1/bin/busybox2
+chmod 777 /tmp/1/bin/autossh
+
+cp /bin/dropbearmulti /tmp/1/bin/dropbearmulti
+ln -sf /bin/dropbearmulti /tmp/1/bin/dropbear
+ln -sf /bin/dropbearmulti /tmp/1/bin/dropbearkey
+ln -sf /bin/dropbearmulti /tmp/1/bin/ssh
+ln -sf /bin/dropbearmulti /tmp/1/bin/dropbearconvert
+
+chmod +x /tmp/1/bin/dropbearmulti || true
+chmod +x /tmp/1/bin/dropbear || true
+chmod +x /tmp/1/bin/dropbearkey || true
+chmod +x /tmp/1/bin/ssh || true
+chmod +x /tmp/1/bin/dropbearconvert || true
+
+mkdir -p /tmp/1/etc/dropbear || true
+/tmp/1/bin/dropbearkey -t dss -f /tmp/1/etc/dropbear/dropbear_dss_host_key
+/tmp/1/bin/dropbearkey -t rsa -s 2048 -f /tmp/1/etc/dropbear/dropbear_rsa_host_key
+/tmp/1/bin/dropbearkey -t ecdsa -s 521 -f /tmp/1/etc/dropbear/dropbear_ecdsa_host_key
+
+cat /tmp/1/etc/shadow | grep -v root > /tmp/1/etc/shadow.tmp
+mv /tmp/1/etc/shadow.tmp /tmp/1/etc/shadow
+ROOTME_EOF
+
+        cat >> "$ROOTME_SCRIPT" << ROOTME_EOF
+echo "root:${ROOT_HASH}:16243:0:99999:7:::" >> /tmp/1/etc/shadow
+
+ROOTME_EOF
+
+        cat >> "$ROOTME_SCRIPT" << 'ROOTME_EOF'
+if ! grep -q "/bin/dropbear" /tmp/1/etc/init.d/rcS; then
+  echo "/bin/dropbear" >> /tmp/1/etc/init.d/rcS
+fi
+
+ROOTME_EOF
+      fi
+
+      cat >> "$ROOTME_SCRIPT" << ROOTME_EOF
+sed -i 's|<a key="cloudregisterurl" value="[^"]*"|<a key="cloudregisterurl" value="$ENTRY_URL"|g' /tmp/1/etc/nestlabs/client.config
+sed -i '/15.204.110.215/d' /tmp/1/etc/hosts
+sed -i '/\/bin\/nolongerevil/d' /tmp/1/etc/init.d/rcS
+
+ROOTME_EOF
+
+      if [ "$USE_CUSTOM_CERT" = true ]; then
+        cat >> "$ROOTME_SCRIPT" << 'ROOTME_EOF'
+cat > /tmp/1/etc/ssl/certs/ca-bundle.pem << 'CA_CERT_EOF'
+ROOTME_EOF
+
+        cat >> "$ROOTME_SCRIPT" << ROOTME_EOF
+$CA_CERT_CONTENT
+ROOTME_EOF
+
+        cat >> "$ROOTME_SCRIPT" << 'ROOTME_EOF'
+CA_CERT_EOF
+chmod 644 /tmp/1/etc/ssl/certs/ca-bundle.pem || true
+
+ROOTME_EOF
+      fi
+
+      cat >> "$ROOTME_SCRIPT" << 'ROOTME_EOF'
+umount /tmp/1 2>/dev/null || true
+reboot
+ROOTME_EOF
+
+      chmod 777 "$ROOTME_SCRIPT"
+      chmod +x "$ROOTME_SCRIPT"
+      print_success "Generated dynamic rootme script with API URL: $ENTRY_URL"
+    else
+      print_warning "rootme script not found at /etc/init.d/rootme"
+    fi
+
+    if [ "$DEBUG_PAUSE" = true ]; then
+      echo
+      echo -e "${BOLD}${YELLOW}════════════════════════════════════════════════════════════${NC}"
+      echo -e "${BOLD}${YELLOW}   PAUSED FOR MANUAL MODIFICATIONS${NC}"
+      echo -e "${BOLD}${YELLOW}════════════════════════════════════════════════════════════${NC}"
+      echo
+      echo -e "${CYAN}The initramfs has been extracted to:${NC}"
+      echo -e "  ${BOLD}$SCRIPT_DIR/deps/root/${NC}"
+      echo
+      echo -e "${CYAN}You can now modify files in this directory.${NC}"
+      echo
+      echo -e "${CYAN}Common modifications:${NC}"
+      echo "  • Add/modify files in deps/root/etc/"
+      echo "  • Update init scripts in deps/root/etc/init.d/"
+      echo "  • Add custom binaries to deps/root/bin/"
+      echo "  • Modify SSL certificates in deps/root/etc/ssl/"
+      echo
+      echo -e "${YELLOW}When you're done with modifications:${NC}"
+      echo -e "  ${BOLD}Press ENTER to continue building the kernel${NC}"
+      echo
+      read -p "Press ENTER to continue..."
+      echo
+    fi
 
     cd "$SCRIPT_DIR/deps/root"
-    print_info "Repacking without any modifications..."
+    print_info "Packing modified initramfs..."
     mkdir -p "$SCRIPT_DIR/deps/linux"
     find . -print0 | cpio -o -0 -H newc -R 0:0 > "$SCRIPT_DIR/deps/linux/initramfs_data.cpio" 2>/dev/null
     cd "$SCRIPT_DIR"
-    rm -rf "$SCRIPT_DIR/deps/root"
 
     SIZE=$(du -h "$SCRIPT_DIR/deps/linux/initramfs_data.cpio" | cut -f1)
-    print_success "Repacked cpio without modifications ($SIZE)"
+    print_success "Repacked initramfs ($SIZE)"
 
-    print_info "Building kernel with repacked cpio..."
+    # Verify repacked CPIO integrity
+    if [ -f "$SCRIPT_DIR/deps/initramfs_data.cpio" ]; then
+      print_info "Verifying CPIO integrity..."
+
+      ORIG_CPIO="$SCRIPT_DIR/deps/initramfs_data.cpio"
+      NEW_CPIO="$SCRIPT_DIR/deps/linux/initramfs_data.cpio"
+
+      # Extract both to temp directories for comparison
+      ORIG_TMP=$(mktemp -d)
+      NEW_TMP=$(mktemp -d)
+
+      (cd "$ORIG_TMP" && cpio -id < "$ORIG_CPIO" 2>/dev/null)
+      (cd "$NEW_TMP" && cpio -id < "$NEW_CPIO" 2>/dev/null)
+
+      # Count files, directories, and symlinks
+      ORIG_FILES=$(find "$ORIG_TMP" -type f | wc -l)
+      ORIG_DIRS=$(find "$ORIG_TMP" -type d | wc -l)
+      ORIG_LINKS=$(find "$ORIG_TMP" -type l | wc -l)
+
+      NEW_FILES=$(find "$NEW_TMP" -type f | wc -l)
+      NEW_DIRS=$(find "$NEW_TMP" -type d | wc -l)
+      NEW_LINKS=$(find "$NEW_TMP" -type l | wc -l)
+
+      echo "  Original: $ORIG_FILES files, $ORIG_DIRS dirs, $ORIG_LINKS symlinks"
+      echo "  Repacked: $NEW_FILES files, $NEW_DIRS dirs, $NEW_LINKS symlinks"
+
+      # Check for differences (case-sensitive filenames are preserved)
+      DIFF_OUTPUT=$(diff -rq "$ORIG_TMP" "$NEW_TMP" 2>/dev/null | grep -v "^Only in" || true)
+      ADDED_FILES=$(diff -rq "$ORIG_TMP" "$NEW_TMP" 2>/dev/null | grep "^Only in $NEW_TMP" | wc -l)
+      REMOVED_FILES=$(diff -rq "$ORIG_TMP" "$NEW_TMP" 2>/dev/null | grep "^Only in $ORIG_TMP" | wc -l)
+
+      if [ -n "$DIFF_OUTPUT" ]; then
+        echo -e "${YELLOW}  Modified: $(echo "$DIFF_OUTPUT" | wc -l) files${NC}"
+      fi
+      if [ "$ADDED_FILES" -gt 0 ]; then
+        echo -e "${GREEN}  Added: $ADDED_FILES files${NC}"
+      fi
+      if [ "$REMOVED_FILES" -gt 0 ]; then
+        echo -e "${RED}  Removed: $REMOVED_FILES files${NC}"
+      fi
+
+      print_success "CPIO verification complete"
+
+      # Cleanup
+      rm -rf "$ORIG_TMP" "$NEW_TMP"
+    fi
+
+    print_info "Building kernel with custom initramfs..."
 
     if [ -d "$SCRIPT_DIR/deps/toolchain/arm-2008q3/bin" ]; then
       export PATH="$SCRIPT_DIR/deps/toolchain/arm-2008q3/bin:$PATH"
@@ -413,6 +626,12 @@ build_firmware() {
     fi
 
     bash scripts/build-kernel.sh
+
+    # Clean up extracted files after successful build
+    if [ $? -eq 0 ]; then
+      rm -rf "$SCRIPT_DIR/deps/root"
+      print_info "Cleaned up extracted initramfs"
+    fi
   else
     if [ ! -f "$FIRMWARE_DIR/uImage" ]; then
       print_warning "Pre-compiled uImage not found"
@@ -480,8 +699,8 @@ main() {
   parse_args "$@"
   print_header
   check_dependencies
-  setup_dependencies
   configure_build
+  setup_dependencies
   build_firmware
   print_results
 }
