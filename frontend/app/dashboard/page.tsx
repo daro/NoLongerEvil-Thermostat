@@ -6,8 +6,9 @@ import { createPortal } from "react-dom";
 import { useThermostat } from "@/lib/store";
 import { ThermostatCard } from "@/components/thermostat-card";
 import { LinkDeviceCard } from "@/components/link-device-card";
-import { AddDeviceCard } from "@/components/add-device-card";
-import { Grid3x3, Plus, X } from "lucide-react";
+import { HomeStatus } from "@/components/home-status";
+import { AnimatedWeather } from "@/components/animated-weather";
+import { Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { motion, AnimatePresence } from "framer-motion";
 import { SignedIn, SignedOut, RedirectToSignIn } from "@clerk/nextjs";
@@ -58,49 +59,48 @@ function DashboardContent() {
 
   return (
     <div className="relative">
-      <div className="mb-6 flex items-center justify-between flex-wrap gap-3">
-        <div>
+      <div className="mb-6 flex items-center justify-center flex-wrap gap-3 relative">
+        <div className="flex-1 text-center">
+          {hasDevices && <AnimatedWeather />}
           <h1 className="text-3xl md:text-4xl font-bold bg-gradient-to-br from-zinc-900 to-zinc-700 dark:from-zinc-100 dark:to-zinc-300 bg-clip-text text-transparent">
-            Your Thermostats
+            Your Home
           </h1>
-          <p className="text-zinc-600 dark:text-zinc-400 mt-2">
-            {hasDevices
-              ? `Manage ${devices.length} thermostat${devices.length !== 1 ? "s" : ""}`
-              : "No devices linked yet. Add a thermostat to get started."}
-          </p>
+          {hasDevices && (
+            <div className="mt-3 flex justify-center">
+              <HomeStatus />
+            </div>
+          )}
         </div>
-        <div className="flex items-center gap-2">
-          <Button asChild variant="outline">
-            <Link href="/">Back to home</Link>
-          </Button>
-        </div>
-      </div>
-
-      {!hasDevices ? (
-        <div className="grid gap-6">
-          <div className="surface p-12 text-center">
-            <Grid3x3 className="h-12 w-12 mx-auto text-zinc-400 mb-4" />
-            <h3 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100 mb-2">
-              No Devices Connected
-            </h3>
-            <p className="text-zinc-600 dark:text-zinc-400 max-w-md mx-auto mb-6">
-              Use the entry key displayed on your No Longer Evil Thermostat to link it to your account.
-              Keys expire after 60 minutes to keep things secure.
-            </p>
+        {hasDevices && (
+          <div className="absolute right-0 top-0">
             <Button
               onClick={() => setIsModalOpen(true)}
-              size="lg"
+              variant="outline"
               className="gap-2"
             >
-              <Plus className="h-5 w-5" />
-              Link Your Thermostat
+              <Plus className="h-4 w-4" />
+              Add Thermostat
             </Button>
           </div>
+        )}
+      </div>
+
+      {hasDevices ? (
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 justify-items-center">
+          {gridDevices}
         </div>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {gridDevices}
-          <AddDeviceCard onLinked={() => fetchStatus(undefined)} />
+        <div className="max-w-2xl mx-auto mt-12">
+          <div className="text-center mb-8">
+            <p className="text-zinc-600 dark:text-zinc-400">
+              Get started by linking your first thermostat
+            </p>
+          </div>
+          <LinkDeviceCard
+            onLinked={() => {
+              fetchStatus(undefined);
+            }}
+          />
         </div>
       )}
 

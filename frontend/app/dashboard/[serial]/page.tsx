@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import dynamic from "next/dynamic";
 import { usePullToRefresh } from "@/lib/use-pull-to-refresh";
 import { motion, AnimatePresence } from "framer-motion";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, Settings } from "lucide-react";
 import { TempsPanel } from "@/components/temps-panel";
 import { StatusBar } from "@/components/status-bar";
 import { LinkDeviceCard } from "@/components/link-device-card";
@@ -133,6 +133,11 @@ function DashboardSerialContent() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button asChild variant="outline" size="icon">
+            <Link href={`/dashboard/${serial}/settings`}>
+              <Settings className="h-4 w-4" />
+            </Link>
+          </Button>
           <Button asChild variant="outline">
             <Link href="/dashboard">All devices</Link>
           </Button>

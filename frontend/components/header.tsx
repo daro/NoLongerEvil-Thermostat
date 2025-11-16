@@ -53,18 +53,6 @@ export function Header({ showNav = true }: HeaderProps) {
                 >
                   Schedule
                 </Link>
-              </SignedIn>
-              <Link
-                href="/about"
-                className={`hidden md:block px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
-                  pathname === "/about"
-                    ? "bg-brand-100 dark:bg-brand-900/30 text-brand-700 dark:text-brand-300"
-                    : "text-zinc-600 dark:text-zinc-400 hover:text-brand-600 dark:hover:text-brand-400 hover:bg-zinc-100 dark:hover:bg-zinc-800/50"
-                }`}
-              >
-                About
-              </Link>
-              <SignedIn>
                 <Link
                   href="/settings"
                   className={`hidden md:block px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
@@ -76,6 +64,26 @@ export function Header({ showNav = true }: HeaderProps) {
                   Settings
                 </Link>
               </SignedIn>
+              <SignedOut>
+                <Link
+                  href="/about"
+                  className={`hidden md:block px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                    pathname === "/about"
+                      ? "bg-brand-100 dark:bg-brand-900/30 text-brand-700 dark:text-brand-300"
+                      : "text-zinc-600 dark:text-zinc-400 hover:text-brand-600 dark:hover:text-brand-400 hover:bg-zinc-100 dark:hover:bg-zinc-800/50"
+                  }`}
+                >
+                  About
+                </Link>
+              </SignedOut>
+              <Link
+                href="https://docs.nolongerevil.com/introduction"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hidden md:block px-3 py-1.5 rounded-lg text-sm font-medium transition-all text-zinc-600 dark:text-zinc-400 hover:text-brand-600 dark:hover:text-brand-400 hover:bg-zinc-100 dark:hover:bg-zinc-800/50"
+              >
+                Docs
+              </Link>
             </>
           )}
           <ThemeSwitch />

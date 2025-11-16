@@ -3,6 +3,7 @@
 import { create } from "zustand";
 import { thermostatAPI, ThermostatMode, FanMode } from "./api";
 import { celsiusToFahrenheit, fahrenheitToCelsius } from "./utils/temperature";
+import { resolveDeviceName } from "./utils/device-names";
 
 export type Mode = ThermostatMode;
 export type SystemStatus = "cooling" | "heating" | "fan" | "idle" | "unknown";
@@ -29,6 +30,13 @@ export interface DeviceData {
   isEcoMode: boolean;
   showLeaf: boolean;
   lastUpdated?: number | null;
+  isOwner?: boolean;
+  sharedBy?: string;
+  permissions?: string[];
+  temperatureLock: boolean;
+  temperatureLockLow: number | null;
+  temperatureLockHigh: number | null;
+  temperatureLockPinHash: string;
 }
 
 interface UserInteractionState {
@@ -40,8 +48,33 @@ interface UserInteractionState {
   };
 }
 
+export interface UserState {
+  away?: boolean;
+  away_timestamp?: number;
+  away_setter?: number;
+  vacation_mode?: boolean;
+  manual_away_timestamp?: number;
+  weather?: {
+    current?: {
+      condition?: string;
+      temp_c?: number;
+      temp_f?: number;
+      humidity?: number;
+      icon?: string;
+    };
+    location?: {
+      city?: string;
+      state?: string;
+      zip?: string;
+      country?: string;
+    };
+    updatedAt?: number;
+  };
+}
+
 interface ThermostatState {
   devices: DeviceData[];
+  userState: UserState | null;
   activeDeviceSerial: string | null;
   isLoading: boolean;
   error: string | null;
@@ -61,6 +94,13 @@ interface ThermostatState {
   setEcoMode: (enabled: boolean) => Promise<void>;
   setTemperatureScale: (scale: "C" | "F", serial: string) => Promise<void>;
   setDeviceName: (name: string, serial: string) => Promise<void>;
+  setTemperatureLock: (
+    serial: string,
+    enabled: boolean,
+    pin?: string,
+    lowTemp?: number,
+    highTemp?: number
+  ) => Promise<void>;
   deleteDevice: (serial: string) => Promise<void>;
   fetchStatus: (serial?: string) => Promise<void>;
 }
@@ -274,9 +314,11 @@ function parseDeviceState(
     resolvedSetpoint = previous?.setpoint ?? null;
   }
 
-  const name = typeof shared?.name === "string" && shared.name.trim().length
-    ? shared.name.trim()
-    : previous?.name;
+  // Device name resolution with fallback priority
+  const customName = previous?.name; // User-set custom name from DB
+  const sharedName = typeof shared?.name === "string" ? shared.name : null;
+  const whereId = typeof device?.where_id === "string" ? device.where_id : null;
+  const name = resolveDeviceName(customName, sharedName, whereId);
 
   const autoAwayValue = firstNumber(shared?.auto_away);
   const isAway = autoAwayValue !== null ? autoAwayValue > 0 : Boolean(shared?.away);
@@ -289,6 +331,14 @@ function parseDeviceState(
   const lastUpdated = lastUpdatedSeconds !== null
     ? Number(lastUpdatedSeconds) * 1000
     : previous?.lastUpdated ?? null;
+
+  // Temperature lock
+  const temperatureLock = Boolean(device?.temperature_lock);
+  const temperatureLockLow = toDisplayTemperature(firstNumber(device?.temperature_lock_low_temp), scale);
+  const temperatureLockHigh = toDisplayTemperature(firstNumber(device?.temperature_lock_high_temp), scale);
+  const temperatureLockPinHash = typeof device?.temperature_lock_pin_hash === "string"
+    ? device.temperature_lock_pin_hash
+    : "";
 
   return {
     serial,
@@ -312,6 +362,10 @@ function parseDeviceState(
     isEcoMode,
     showLeaf,
     lastUpdated,
+    temperatureLock,
+    temperatureLockLow: temperatureLockLow !== null ? roundTemp(temperatureLockLow, scale) : null,
+    temperatureLockHigh: temperatureLockHigh !== null ? roundTemp(temperatureLockHigh, scale) : null,
+    temperatureLockPinHash,
   };
 }
 
@@ -363,6 +417,7 @@ function clearFieldTouch(
 
 export const useThermostat = create<ThermostatState>((set, get) => ({
   devices: [],
+  userState: null,
   activeDeviceSerial: null,
   isLoading: false,
   error: null,
@@ -779,6 +834,83 @@ export const useThermostat = create<ThermostatState>((set, get) => ({
     }
   },
 
+  setTemperatureLock: async (serial, enabled, pin, lowTemp, highTemp) => {
+    const devicesSnapshot = get().devices;
+    const device = devicesSnapshot.find((d) => d.serial === serial);
+
+    if (!device) {
+      throw new Error("Device not found");
+    }
+
+    // Import hash function dynamically
+    const { hashPin } = await import("./utils/hash");
+
+    let pinHash: string | undefined;
+    let lowTempCelsius: number | undefined;
+    let highTempCelsius: number | undefined;
+
+    if (enabled) {
+      if (!pin || lowTemp === undefined || highTemp === undefined) {
+        throw new Error("PIN and temperature range are required when enabling lock");
+      }
+
+      // Hash the PIN with serial number
+      pinHash = await hashPin(pin, serial);
+
+      // Convert temperatures to Celsius for the device
+      lowTempCelsius = toNestCelsius(lowTemp, device.temperatureScale);
+      highTempCelsius = toNestCelsius(highTemp, device.temperatureScale);
+
+      // Optimistically update UI
+      set({
+        devices: devicesSnapshot.map((d) =>
+          d.serial === serial
+            ? {
+                ...d,
+                temperatureLock: true,
+                temperatureLockLow: lowTemp,
+                temperatureLockHigh: highTemp,
+                temperatureLockPinHash: pinHash as string,
+              }
+            : d
+        ),
+        isLoading: true,
+        error: null,
+      });
+    } else {
+      // Optimistically update UI for unlock
+      set({
+        devices: devicesSnapshot.map((d) =>
+          d.serial === serial
+            ? {
+                ...d,
+                temperatureLock: false,
+                temperatureLockPinHash: "",
+              }
+            : d
+        ),
+        isLoading: true,
+        error: null,
+      });
+    }
+
+    try {
+      await thermostatAPI.setTemperatureLock(
+        serial,
+        enabled,
+        pinHash,
+        lowTempCelsius,
+        highTempCelsius
+      );
+      set({ isLoading: false });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to update temperature lock";
+      set({ error: message, devices: devicesSnapshot, isLoading: false });
+      console.error("[Thermostat] Failed to update temperature lock:", error);
+      throw error;
+    }
+  },
+
   deleteDevice: async (serial) => {
     const devicesSnapshot = get().devices;
 
@@ -839,8 +971,23 @@ export const useThermostat = create<ThermostatState>((set, get) => ({
         ? parsed.some((device) => device.serial === preferredSerial)
         : false;
 
+      // Extract user state from first device (all devices share the same user state)
+      let userState: UserState | null = null;
+      if (response.devices && response.devices.length > 0) {
+        const firstSerial = response.devices[0];
+        const deviceState = response.deviceState?.[firstSerial];
+        if (deviceState) {
+          // Find user state key (user.{userId})
+          const userStateKey = Object.keys(deviceState).find(key => key.startsWith('user.'));
+          if (userStateKey && deviceState[userStateKey]?.value) {
+            userState = deviceState[userStateKey].value as UserState;
+          }
+        }
+      }
+
       set({
         devices: parsed,
+        userState,
         activeDeviceSerial: hasPreferred
           ? preferredSerial
           : parsed[0]?.serial ?? null,

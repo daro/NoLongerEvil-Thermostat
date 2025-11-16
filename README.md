@@ -51,6 +51,7 @@ chmod +x install.sh
 ```
 
 This will:
+
 - Prompt you for your API server URL
 - Build the firmware with Docker
 - Launch the Electron installer app
@@ -67,16 +68,19 @@ docker compose exec backend ./generate_admin_key.sh
 ```
 
 Save the admin key that is generated.
+It will look like:
+
+```
+Admin key:
+convex-self-hosted|01949bdf5627839049029834...
+```
 
 ### Step 5: Configure Environment Variables
 
-**Server** (`server/.env.local`):
-```bash
-CONVEX_URL=http://localhost:3210
-CONVEX_ADMIN_KEY=<admin-key-from-step-4>
-```
+Both Convex and the NoLongerEvil application expect environment vars at `.env.local` instead of the traditional `.env`
 
-**Frontend** (`frontend/.env.local`):
+**Server** (`server/.env.local`):
+
 ```bash
 CONVEX_SELF_HOSTED_URL=http://localhost:3210
 CONVEX_SELF_HOSTED_ADMIN_KEY=<admin-key-from-step-4>
@@ -84,15 +88,20 @@ CONVEX_SELF_HOSTED_ADMIN_KEY=<admin-key-from-step-4>
 
 ### Step 6: Deploy Convex Schema
 
+This takes the "table" schema of the app and deploys it into Convex.
+
 ```bash
-cd frontend
+cd server
 npm install
 npx convex dev
 ```
 
+When this step is done you can Ctrl+C to end the terminal
+
 ### Step 7: Run Backend and Frontend
 
 **Development:**
+Run these in two separate terminals
 
 ```bash
 # Terminal 1 - API Server
@@ -125,6 +134,11 @@ pm2 startup
 
 Visit `http://localhost:3000` to access the dashboard.
 
+### Step 8: Set up your instance
+
+From `http://localhost:3000`, Sign up for an account with an active email address . Clerk will email you a one-time login code.
+Follow the instructions from [https://docs.nolongerevil.com/hosted/installation#step-7:-register-account](https://docs.nolongerevil.com/hosted/installation#step-7:-register-account) onward to get an Entry Key and get your Nest active on your local server.
+
 ## What Gets Flashed
 
 The firmware installation process installs three components:
@@ -134,6 +148,13 @@ The firmware installation process installs three components:
 3. **uImage** - Linux kernel image loaded at address 0x80A00000
 
 After flashing, the device jumps to execution at 0x80100000 (u-boot).
+
+## Security Considerations
+
+This tool provides low-level access to the device's boot process. Use responsibly:
+
+- Only use on devices you own
+- Improper firmware can brick your device (Don't sue me bro)
 
 ## Credits & Acknowledgments
 
