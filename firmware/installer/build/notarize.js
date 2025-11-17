@@ -1,6 +1,7 @@
 const { notarize } = require('@electron/notarize');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 
 exports.default = async function notarizing(context) {
   const { electronPlatformName, appOutDir } = context;
@@ -16,23 +17,31 @@ exports.default = async function notarizing(context) {
     throw new Error(`Cannot find application at: ${appPath}`);
   }
 
-  const appleApiKey = process.env.APPLE_API_KEY;
   const appleApiKeyId = process.env.APPLE_API_KEY_ID;
   const appleApiIssuer = process.env.APPLE_API_ISSUER;
 
-  if (!appleApiKey || !appleApiKeyId || !appleApiIssuer) {
+  if (!appleApiKeyId || !appleApiIssuer) {
     console.warn('Skipping notarization: Missing Apple API credentials');
-    console.warn('Required: APPLE_API_KEY, APPLE_API_KEY_ID, APPLE_API_ISSUER');
+    console.warn('Required: APPLE_API_KEY_ID, APPLE_API_ISSUER');
     return;
   }
 
+  // Use the API key file that was created by the workflow
+  const homeDir = os.homedir();
+  const appleApiKeyPath = path.join(homeDir, 'private_keys', `AuthKey_${appleApiKeyId}.p8`);
+
+  if (!fs.existsSync(appleApiKeyPath)) {
+    throw new Error(`API key file not found at: ${appleApiKeyPath}`);
+  }
+
   console.log(`Notarizing ${appPath}...`);
+  console.log(`Using API key: ${appleApiKeyPath}`);
+  console.log(`Using issuer: ${appleApiIssuer}`);
 
   try {
     await notarize({
       appPath: appPath,
-      appleApiKey: appleApiKey,
-      appleApiKeyId: appleApiKeyId,
+      appleApiKey: appleApiKeyPath,
       appleApiIssuer: appleApiIssuer,
     });
     console.log('Notarization complete!');
