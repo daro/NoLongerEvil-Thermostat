@@ -237,7 +237,8 @@ build_firmware() {
   fi
 
   echo "[✓] Starting Firmware installer GUI..."
-  npm run electron:dev
+  npm run electron:dev > /dev/null 2>&1 &
+  cd "$ROOT_DIR"
 }
 
 launch_installer() {
@@ -259,7 +260,8 @@ launch_installer() {
   fi
 
   echo "[✓] Starting Firmware installer GUI..."
-  npm run electron:dev
+  npm run electron:dev > /dev/null 2>&1 &
+  cd "$ROOT_DIR"
 }
 
 setup_selfhost() {
@@ -280,7 +282,7 @@ setup_selfhost() {
   
   build_server_image
 
-  echo "Self-Host setup complete for $which_backend. You can "
+  echo "Self-Host setup complete using $which_backend backend. You can "
   echo "now run with docker compose."
   echo ""
   echo "  docker compose up -d"
@@ -289,9 +291,6 @@ setup_selfhost() {
 
 setup_convex() {
   local generated_admin_key=""
-
-  echo "[→] Setup docker-compose.yml"
-  cp docker-compose-convex.yml docker-compose.yml
 
   if [ -d $ROOT_DIR/convex ]; then
     if prompt_yes_no "Convex data folder already exists. Do you want to recreate?" "n"; then
