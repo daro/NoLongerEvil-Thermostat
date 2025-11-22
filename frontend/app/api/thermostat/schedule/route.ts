@@ -49,7 +49,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Device not found or unauthorized' }, { status: 403 });
     }
 
-    const scheduleData = await getScheduleBySerial(serialParam);
+    const scheduleData = await getScheduleBySerial(serialParam, userId);
 
     if (!scheduleData) {
       return NextResponse.json({ error: 'Schedule not found' }, { status: 404 });

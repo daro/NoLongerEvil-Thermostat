@@ -73,23 +73,6 @@ export const getDeviceState = query({
 });
 
 /**
- * DEPRECATED: This query had no access control and is a security risk.
- * Use getUserDevicesState instead which checks user permissions.
- *
- * This is kept only for backward compatibility but returns empty data.
- */
-export const getAllState = query({
-  args: {},
-  handler: async () => {
-    console.warn('[DEPRECATED] getAllState query called - this query is deprecated and returns empty data. Use getUserDevicesState instead.');
-    return {
-      devices: [],
-      deviceState: {},
-    };
-  },
-});
-
-/**
  * Get all device states for a specific user with access control
  * Includes owned devices and devices shared with the user
  */

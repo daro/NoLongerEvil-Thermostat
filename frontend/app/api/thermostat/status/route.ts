@@ -195,7 +195,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(emptyState());
     }
 
-    const convexData = await fetchConvexState();
+    const convexData = await fetchConvexState(userId);
     if (convexData) {
       const filteredData = filterStateBySerials(convexData, serials);
       const withWeather = await injectWeatherData(filteredData);

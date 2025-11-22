@@ -91,22 +91,26 @@ export async function listConvexUserDevices(
   return Array.isArray(result) ? result : [];
 }
 
-export async function fetchConvexState(): Promise<any | null> {
-  return tryQuery("device:getAllState", {});
+export async function fetchConvexState(userId?: string): Promise<any | null> {
+  if (!userId) {
+    console.warn('[Convex] fetchConvexState called without userId - returning null');
+    return null;
+  }
+  return tryQuery("device:getUserDevicesState", { userId });
 }
 
 export async function claimConvexEntryKey(code: string, userId: string) {
   return callMutation("users:claimEntryKey", { code, userId });
 }
 
-export async function getScheduleBySerial(serial: string): Promise<any | null> {
-  if (!serial) return null;
+export async function getScheduleBySerial(serial: string, userId: string): Promise<any | null> {
+  if (!serial || !userId) return null;
 
-  // Get all states and filter for schedule on the client side
-  const allStates = await tryQuery("device:getAllState", {});
-  if (!allStates || !allStates.deviceState) return null;
+  // Get user's device states
+  const userStates = await tryQuery("device:getUserDevicesState", { userId });
+  if (!userStates || !userStates.deviceState) return null;
 
-  const deviceStates = allStates.deviceState[serial];
+  const deviceStates = userStates.deviceState[serial];
   if (!deviceStates) return null;
 
   // Look for the schedule object key
