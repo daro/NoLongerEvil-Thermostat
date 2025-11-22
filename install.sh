@@ -198,8 +198,9 @@ build_firmware() {
   if [ "$enable_backplate" = true ]; then
     build_args="$build_args --enable-backplate-sim"
   fi
-
-  local build_log="$ROOT_DIR/firmware_build.log"
+  
+  local build_date_time=`date +"%m%d%Y-%H%M%S"`
+  local build_log="$ROOT_DIR/firmware_build_$build_date_time.log"
   (cd "$BUILDER_DIR" && bash docker-build.sh $build_args) | tee "$build_log"
 
   FIRMWARE_ROOT_PASSWORD=$(grep "Password:" "$build_log" | grep -oE "[A-Za-z0-9]{18}" | tail -1)
