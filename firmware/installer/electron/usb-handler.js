@@ -408,9 +408,9 @@ async function installFirmware(progressCallback, generation = 'gen2', customFile
         };
 
         const sudoCommand =
-          `/bin/bash -c "exec > \\"${logFile}\\" 2>&1; ` +
-          `\\"${binaryPath}\\" -f \\"${tmpFirmwarePaths.xload}\\" -f \\"${tmpFirmwarePaths.uboot}\\" ` +
-          `-a 0x80100000 -f \\"${tmpFirmwarePaths.uimage}\\" -a 0x80A00000 -v -j 0x80100000"`;
+          `/bin/bash -c 'exec > "${logFile}" 2>&1; ` +
+          `"${binaryPath}" -f "${tmpFirmwarePaths.xload}" -f "${tmpFirmwarePaths.uboot}" ` +
+          `-a 0x80100000 -f "${tmpFirmwarePaths.uimage}" -a 0x80A00000 -v -j 0x80100000'`;
 
         sudo.exec(sudoCommand, options, (error, stdout, stderr) => {
           clearInterval(watchInterval);
